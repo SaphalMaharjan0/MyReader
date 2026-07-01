@@ -20,6 +20,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as fflate from 'fflate';
 import { COLORS } from '../constants/theme';
 import { useIsFocused } from '@react-navigation/native';
+import Constants from 'expo-constants';
 
 export default function FilesScreen() {
   const isFocused = useIsFocused();
@@ -59,6 +60,18 @@ export default function FilesScreen() {
       console.log('Root directory not directly readable, requesting permissions...');
     }
 
+    // Detect if running in Expo Go (appOwnership is 'expo')
+    const isExpoGo = Constants.appOwnership === 'expo';
+    if (isExpoGo) {
+      return new Promise((resolve) => {
+        Alert.alert(
+          "Expo Go Storage Limitation",
+          "Expo Go does not have system permissions to read your device's external storage folders directly.\n\nTo browse all files on your device here, you must run the standalone APK build. In the meantime, you can import books using the '+' button in the Library tab which uses the native document picker.",
+          [{ text: "OK", onPress: () => resolve(false) }]
+        );
+      });
+    }
+
     // 2. Request standard READ_EXTERNAL_STORAGE permission
     try {
       const granted = await PermissionsAndroid.request(
@@ -95,11 +108,19 @@ export default function FilesScreen() {
             onPress: async () => {
               const { Linking } = require('react-native');
               try {
-                await Linking.openSettings();
+                // Try opening direct All Files settings for this package
+                await Linking.sendIntent('android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION', [
+                  { key: 'package', value: 'com.saphalmaharjan.myreader' }
+                ]);
                 resolve(true);
               } catch (linkErr) {
-                console.log('Could not open settings', linkErr);
-                resolve(false);
+                try {
+                  await Linking.openSettings();
+                  resolve(true);
+                } catch (err) {
+                  console.log('Could not open settings', err);
+                  resolve(false);
+                }
               }
             } 
           }
@@ -109,6 +130,8 @@ export default function FilesScreen() {
   };
 
   useEffect(() => {
+    let appStateSubscription;
+
     const init = async () => {
       if (isFocused) {
         const hasPermission = await checkAndRequestStorageAccess();
@@ -122,7 +145,28 @@ export default function FilesScreen() {
         }
       }
     };
+
     init();
+
+    if (isFocused) {
+      const { AppState } = require('react-native');
+      appStateSubscription = AppState.addEventListener('change', async (nextAppState) => {
+        if (nextAppState === 'active') {
+          const hasPermission = await checkAndRequestStorageAccess();
+          if (hasPermission && Platform.OS === 'android') {
+            const rootDir = 'file:///storage/emulated/0/';
+            setCurrentDir(rootDir);
+            setPathHistory([rootDir]);
+          }
+        }
+      });
+    }
+
+    return () => {
+      if (appStateSubscription) {
+        appStateSubscription.remove();
+      }
+    };
   }, [isFocused]);
 
   useEffect(() => {
@@ -382,10 +426,18 @@ export default function FilesScreen() {
               else if (isDoc) bookType = nameLower.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/msword';
               else if (isPpt) bookType = nameLower.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : 'application/vnd.ms-powerpoint';
 
+              // Copy the file to the app's internal sandbox directory for persistent access
+              const safeName = Date.now() + '_' + item.name.replace(/[^a-zA-Z0-9.]/g, '_');
+              const newUri = FileSystem.documentDirectory + safeName;
+              await FileSystem.copyAsync({
+                from: item.uri,
+                to: newUri
+              });
+
               const newBook = {
                 id: Date.now().toString(),
                 name: item.name,
-                uri: item.uri,
+                uri: newUri,
                 type: bookType,
                 dateAdded: new Date().toISOString(),
                 coverUri: null
@@ -394,7 +446,7 @@ export default function FilesScreen() {
               let importedBook = { ...newBook };
               if (isEpub) {
                 try {
-                  const coverPath = await extractLocalCover(item.uri, newBook.id);
+                  const coverPath = await extractLocalCover(newUri, newBook.id);
                   if (coverPath) {
                     importedBook.coverUri = coverPath;
                   }
@@ -476,7 +528,7 @@ export default function FilesScreen() {
       setPathHistory([FileSystem.documentDirectory]);
     } else {
       // Toggle to device
-      const hasPermission = await requestStoragePermission();
+      const hasPermission = await checkAndRequestStorageAccess();
       if (hasPermission && Platform.OS === 'android') {
         const rootDir = 'file:///storage/emulated/0/';
         setCurrentDir(rootDir);
