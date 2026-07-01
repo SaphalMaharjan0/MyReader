@@ -52,16 +52,22 @@ export default function FilesScreen() {
   const checkAndRequestStorageAccess = async () => {
     if (Platform.OS !== 'android') return true;
 
-    // 1. Silent check to see if root storage is already readable
+    const isExpoGo = Constants.appOwnership === 'expo';
+
+    // 1. Silent check to see if root storage is already readable with standard folders
     try {
-      await FileSystem.readDirectoryAsync('file:///storage/emulated/0/');
-      return true;
+      const items = await FileSystem.readDirectoryAsync('file:///storage/emulated/0/');
+      const standardFolders = ['download', 'documents', 'dcim', 'pictures', 'books'];
+      const hasStandardFolders = items.some(name => standardFolders.includes(name.toLowerCase()));
+      if (items && items.length > 0 && (items.length > 2 || hasStandardFolders)) {
+        return true;
+      }
+      console.log('Root directory list is restricted, requesting full permissions...');
     } catch (e) {
       console.log('Root directory not directly readable, requesting permissions...');
     }
 
     // Detect if running in Expo Go (appOwnership is 'expo')
-    const isExpoGo = Constants.appOwnership === 'expo';
     if (isExpoGo) {
       return new Promise((resolve) => {
         Alert.alert(
@@ -86,8 +92,12 @@ export default function FilesScreen() {
       );
       if (granted === PermissionsAndroid.RESULTS.GRANTED) {
         try {
-          await FileSystem.readDirectoryAsync('file:///storage/emulated/0/');
-          return true;
+          const items = await FileSystem.readDirectoryAsync('file:///storage/emulated/0/');
+          const standardFolders = ['download', 'documents', 'dcim', 'pictures', 'books'];
+          const hasStandardFolders = items.some(name => standardFolders.includes(name.toLowerCase()));
+          if (items && items.length > 0 && (items.length > 2 || hasStandardFolders)) {
+            return true;
+          }
         } catch (err) {
           // Still restricted (Android 11+ Scoped Storage)
         }
