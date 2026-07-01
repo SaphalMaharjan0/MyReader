@@ -72,6 +72,24 @@ export const updateBook = async (book) => {
 
 const SETTINGS_KEY = '@app_settings';
 
+const listeners = new Set();
+export const subscribeToSettings = (listener) => {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+};
+
+const notifyListeners = (settings) => {
+  listeners.forEach((l) => {
+    try {
+      l(settings);
+    } catch (e) {
+      console.log('Error notifying listener', e);
+    }
+  });
+};
+
 export const getSettings = async () => {
   try {
     const jsonValue = await AsyncStorage.getItem(SETTINGS_KEY);
@@ -101,6 +119,7 @@ export const updateSettings = async (newSettings) => {
     const current = await getSettings();
     const updated = { ...current, ...newSettings };
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+    notifyListeners(updated);
     return updated;
   } catch (e) {
     console.error('Error updating settings', e);
@@ -239,6 +258,47 @@ export const importMoonReaderData = async (fileContent, fileName = '') => {
   } catch (e) {
     console.error('Error parsing Moon Reader file', e);
     throw e;
+  }
+};
+
+const BOOKMARKS_KEY = '@app_bookmarks';
+
+export const getBookmarks = async () => {
+  try {
+    const jsonValue = await AsyncStorage.getItem(BOOKMARKS_KEY);
+    return jsonValue != null ? JSON.parse(jsonValue) : [];
+  } catch (e) {
+    console.error('Error reading bookmarks', e);
+    return [];
+  }
+};
+
+export const saveBookmark = async (bookmark) => {
+  try {
+    const currentBookmarks = await getBookmarks();
+    const existingIndex = currentBookmarks.findIndex((b) => b.id === bookmark.id);
+    if (existingIndex >= 0) {
+      currentBookmarks[existingIndex] = bookmark;
+    } else {
+      currentBookmarks.push(bookmark);
+    }
+    await AsyncStorage.setItem(BOOKMARKS_KEY, JSON.stringify(currentBookmarks));
+    return currentBookmarks;
+  } catch (e) {
+    console.error('Error saving bookmark', e);
+    return [];
+  }
+};
+
+export const removeBookmark = async (bookmarkId) => {
+  try {
+    const currentBookmarks = await getBookmarks();
+    const filtered = currentBookmarks.filter((b) => b.id !== bookmarkId);
+    await AsyncStorage.setItem(BOOKMARKS_KEY, JSON.stringify(filtered));
+    return filtered;
+  } catch (e) {
+    console.error('Error removing bookmark', e);
+    return [];
   }
 };
 

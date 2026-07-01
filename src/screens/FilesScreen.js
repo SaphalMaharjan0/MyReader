@@ -27,13 +27,39 @@ export default function FilesScreen() {
   const [pathHistory, setPathHistory] = useState([FileSystem.documentDirectory]);
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
   
   // Custom Modals
   const [createFolderVisible, setCreateFolderVisible] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
 
-  const requestStoragePermission = async () => {
+  useEffect(() => {
+    const loadInitial = async () => {
+      const { getSettings } = require('../utils/storage');
+      const settings = await getSettings();
+      if (settings) setIsDarkMode(settings.darkMode);
+    };
+    loadInitial();
+
+    const { subscribeToSettings } = require('../utils/storage');
+    const unsubscribe = subscribeToSettings((newSettings) => {
+      setIsDarkMode(newSettings.darkMode);
+    });
+    return unsubscribe;
+  }, []);
+
+  const checkAndRequestStorageAccess = async () => {
     if (Platform.OS !== 'android') return true;
+
+    // 1. Silent check to see if root storage is already readable
+    try {
+      await FileSystem.readDirectoryAsync('file:///storage/emulated/0/');
+      return true;
+    } catch (e) {
+      console.log('Root directory not directly readable, requesting permissions...');
+    }
+
+    // 2. Request standard READ_EXTERNAL_STORAGE permission
     try {
       const granted = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
@@ -45,17 +71,47 @@ export default function FilesScreen() {
           buttonPositive: "OK"
         }
       );
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
+      if (granted === PermissionsAndroid.RESULTS.GRANTED) {
+        try {
+          await FileSystem.readDirectoryAsync('file:///storage/emulated/0/');
+          return true;
+        } catch (err) {
+          // Still restricted (Android 11+ Scoped Storage)
+        }
+      }
     } catch (err) {
-      console.warn(err);
-      return false;
+      console.log('READ_EXTERNAL_STORAGE error', err);
     }
+
+    // 3. Prompt user for All Files Access on Android 11+
+    return new Promise((resolve) => {
+      Alert.alert(
+        "All Files Access Required",
+        "On Android 11 and above, SmartReader AI needs 'All Files Access' to read books from the root storage directory. Please turn on 'Allow access to manage all files' in the app settings.",
+        [
+          { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+          { 
+            text: "Open Settings", 
+            onPress: async () => {
+              const { Linking } = require('react-native');
+              try {
+                await Linking.openSettings();
+                resolve(true);
+              } catch (linkErr) {
+                console.log('Could not open settings', linkErr);
+                resolve(false);
+              }
+            } 
+          }
+        ]
+      );
+    });
   };
 
   useEffect(() => {
     const init = async () => {
       if (isFocused) {
-        const hasPermission = await requestStoragePermission();
+        const hasPermission = await checkAndRequestStorageAccess();
         if (hasPermission && Platform.OS === 'android') {
           const rootDir = 'file:///storage/emulated/0/';
           setCurrentDir(rootDir);
@@ -292,17 +348,27 @@ export default function FilesScreen() {
   };
 
   const handleImportFile = (item) => {
-    const isEpub = item.name.toLowerCase().endsWith('.epub');
-    const isPdf = item.name.toLowerCase().endsWith('.pdf');
+    const nameLower = item.name.toLowerCase();
+    const isEpub = nameLower.endsWith('.epub');
+    const isPdf = nameLower.endsWith('.pdf');
+    const isDoc = nameLower.endsWith('.docx') || nameLower.endsWith('.doc');
+    const isPpt = nameLower.endsWith('.pptx') || nameLower.endsWith('.ppt');
     
-    if (!isEpub && !isPdf) {
-      Alert.alert('Unsupported Format', 'Please choose an EPUB or PDF file.');
+    if (!isEpub && !isPdf && !isDoc && !isPpt) {
+      Alert.alert('Unsupported Format', 'Please choose an EPUB, PDF, Word Document (.doc/.docx), or PowerPoint Presentation (.ppt/.pptx).');
       return;
     }
 
+    let formatExt = '.epub';
+    if (isPdf) formatExt = '.pdf';
+    else if (nameLower.endsWith('.docx')) formatExt = '.docx';
+    else if (nameLower.endsWith('.doc')) formatExt = '.doc';
+    else if (nameLower.endsWith('.pptx')) formatExt = '.pptx';
+    else if (nameLower.endsWith('.ppt')) formatExt = '.ppt';
+
     Alert.alert(
       'Import Book',
-      `Import "${item.name.replace('.epub', '').replace('.pdf', '')}" to your library?`,
+      `Import "${item.name.replace(formatExt, '')}" to your library?`,
       [
         { text: 'Cancel', style: 'cancel' },
         { 
@@ -310,11 +376,17 @@ export default function FilesScreen() {
           onPress: async () => {
             try {
               const { saveBook } = require('../utils/storage');
+              
+              let bookType = 'application/epub+zip';
+              if (isPdf) bookType = 'application/pdf';
+              else if (isDoc) bookType = nameLower.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/msword';
+              else if (isPpt) bookType = nameLower.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : 'application/vnd.ms-powerpoint';
+
               const newBook = {
                 id: Date.now().toString(),
                 name: item.name,
                 uri: item.uri,
-                type: isEpub ? 'application/epub+zip' : 'application/pdf',
+                type: bookType,
                 dateAdded: new Date().toISOString(),
                 coverUri: null
               };
@@ -418,8 +490,11 @@ export default function FilesScreen() {
   };
 
   const renderFileItem = ({ item }) => {
-    const isEpub = item.name.toLowerCase().endsWith('.epub');
-    const isPdf = item.name.toLowerCase().endsWith('.pdf');
+    const nameLower = item.name.toLowerCase();
+    const isEpub = nameLower.endsWith('.epub');
+    const isPdf = nameLower.endsWith('.pdf');
+    const isDoc = nameLower.endsWith('.docx') || nameLower.endsWith('.doc');
+    const isPpt = nameLower.endsWith('.pptx') || nameLower.endsWith('.ppt');
     
     let iconName = 'file-tray-full-outline';
     let iconColor = '#888';
@@ -431,19 +506,25 @@ export default function FilesScreen() {
       iconName = 'book';
       iconColor = COLORS.primary;
     } else if (isPdf) {
-      iconName = 'document';
+      iconName = 'document-text';
       iconColor = '#e74c3c';
+    } else if (isDoc) {
+      iconName = 'document-text-outline';
+      iconColor = '#3a7bd5';
+    } else if (isPpt) {
+      iconName = 'easel-outline';
+      iconColor = '#d35400';
     }
 
     return (
-      <View style={styles.fileRow}>
+      <View style={[styles.fileRow, { backgroundColor: isDarkMode ? '#1E1E1E' : '#FFFFFF', borderBottomWidth: isDarkMode ? 0 : 1, borderBottomColor: '#E5E5E5' }]}>
         <TouchableOpacity 
           style={styles.fileDetails} 
           onPress={() => item.isDirectory ? handleNavigateFolder(item) : handleImportFile(item)}
         >
           <Ionicons name={iconName} size={28} color={iconColor} style={styles.fileIcon} />
           <View style={styles.fileTextContainer}>
-            <Text style={styles.fileName} numberOfLines={1}>{item.name}</Text>
+            <Text style={[styles.fileName, { color: isDarkMode ? '#FFF' : '#333' }]} numberOfLines={1}>{item.name}</Text>
             <Text style={styles.fileSub}>
               {item.isDirectory ? 'Folder' : (item.size ? (item.size / 1024 / 1024).toFixed(2) + ' MB' : 'Book')}
             </Text>
@@ -461,26 +542,26 @@ export default function FilesScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: isDarkMode ? '#121212' : '#F5F5F5' }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: isDarkMode ? '#121212' : '#F5F5F5', borderBottomColor: isDarkMode ? '#2A2A2A' : '#E0E0E0' }]}>
         {pathHistory.length > 1 && (
           <TouchableOpacity style={styles.backBtn} onPress={handleNavigateUp}>
-            <Ionicons name="arrow-back" size={24} color="#FFF" />
+            <Ionicons name="arrow-back" size={24} color={isDarkMode ? '#FFF' : '#333'} />
           </TouchableOpacity>
         )}
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>File Storage</Text>
+          <Text style={[styles.headerTitle, { color: isDarkMode ? '#FFF' : '#333' }]}>File Storage</Text>
           <Text style={styles.headerSub} numberOfLines={1}>{formatPathLabel()}</Text>
         </View>
         <TouchableOpacity 
-          style={[styles.actionBtn, { marginRight: 10, backgroundColor: '#222' }]} 
+          style={[styles.actionBtn, { marginRight: 10, backgroundColor: isDarkMode ? '#222' : '#E0E0E0' }]} 
           onPress={toggleStorageRoot}
         >
           <Ionicons 
             name={currentDir.startsWith('file:///storage/emulated/0/') ? "swap-horizontal" : "hardware-chip-outline"} 
             size={24} 
-            color="#FFF" 
+            color={isDarkMode ? '#FFF' : '#333'} 
           />
         </TouchableOpacity>
         <TouchableOpacity 
@@ -498,8 +579,8 @@ export default function FilesScreen() {
         </View>
       ) : files.length === 0 ? (
         <View style={styles.center}>
-          <Ionicons name="folder-open-outline" size={64} color="#555" />
-          <Text style={styles.emptyText}>This folder is empty.</Text>
+          <Ionicons name="folder-open-outline" size={64} color={isDarkMode ? '#555' : '#CCC'} />
+          <Text style={[styles.emptyText, { color: isDarkMode ? '#FFF' : '#333' }]}>This folder is empty.</Text>
           <Text style={styles.emptySubText}>Tap folder icon in header to create a new folder.</Text>
         </View>
       ) : (
@@ -514,10 +595,10 @@ export default function FilesScreen() {
       {/* Create Folder Modal */}
       <Modal visible={createFolderVisible} transparent={true} animationType="fade" onRequestClose={() => setCreateFolderVisible(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setCreateFolderVisible(false)}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Create New Folder</Text>
+          <View style={[styles.modalContent, { backgroundColor: isDarkMode ? '#1E1E1E' : '#FFFFFF' }]}>
+            <Text style={[styles.modalTitle, { color: isDarkMode ? '#FFF' : '#333' }]}>Create New Folder</Text>
             <TextInput 
-              style={styles.input}
+              style={[styles.input, { backgroundColor: isDarkMode ? '#2A2A2A' : '#E0E0E0', color: isDarkMode ? '#FFF' : '#333' }]}
               placeholder="Folder Name"
               placeholderTextColor="#666"
               value={newFolderName}
