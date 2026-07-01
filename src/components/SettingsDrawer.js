@@ -15,6 +15,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as DocumentPicker from 'expo-document-picker';
 import { COLORS } from '../constants/theme';
 import { getSettings, updateSettings, subscribeToSettings, getBooks, clearBooks, importMoonReaderData } from '../utils/storage';
+import { checkAndRequestStorageAccess } from '../utils/permissions';
 
 export default function SettingsDrawer({ visible, onClose, navigation, onBooksUpdated }) {
   const [renderDrawer, setRenderDrawer] = useState(false);
@@ -154,6 +155,27 @@ export default function SettingsDrawer({ visible, onClose, navigation, onBooksUp
   };
 
   const handleImportBackup = async () => {
+    try {
+      const hasPermission = await checkAndRequestStorageAccess();
+      if (!hasPermission) {
+        Alert.alert(
+          "Permission Required",
+          "Without storage permission, you can import the backup but you will not be able to read any books located on your device storage.\n\nDo you still want to proceed?",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Proceed", onPress: () => proceedImportBackup() }
+          ]
+        );
+        return;
+      }
+      await proceedImportBackup();
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Error', 'Could not import file: ' + e.message);
+    }
+  };
+
+  const proceedImportBackup = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
       if (!result.canceled && result.assets && result.assets.length > 0) {

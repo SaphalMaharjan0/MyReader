@@ -207,7 +207,7 @@ export const importMoonReaderData = async (fileContent, fileName = '') => {
                        author: author,
                        uri: 'file://' + line,
                        type: line.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/epub+zip',
-                       dateAdded: new Date().toISOString(),
+                       dateAdded: new Date(Date.now() + j * 1000).toISOString(),
                        coverUri: null,
                        progress: 0
                      });
@@ -242,7 +242,7 @@ export const importMoonReaderData = async (fileContent, fileName = '') => {
           author: author,
           uri: 'imported://txt_' + Date.now() + i,
           type: 'text/plain',
-          dateAdded: new Date().toISOString(),
+          dateAdded: new Date(Date.now() + i * 1000).toISOString(),
           coverUri: null
         });
       }

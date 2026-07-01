@@ -5,6 +5,7 @@ import { COLORS } from '../constants/theme';
 import { useNavigation } from '@react-navigation/native';
 import { getSettings, updateSettings, clearBooks } from '../utils/storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { checkAndRequestStorageAccess } from '../utils/permissions';
 
 const SettingsItem = ({ icon, title, subtitle, value, type, onPress, onToggle, isDark }) => {
   return (
@@ -234,19 +235,46 @@ export default function SettingsScreen() {
               if (isPicking) return;
               setIsPicking(true);
               try {
-                const DocumentPicker = require('expo-document-picker');
-                const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
-                if (!result.canceled && result.assets && result.assets.length > 0) {
-                  const fileUri = result.assets[0].uri;
-                  const fileName = result.assets[0].name.toLowerCase();
-                  
-                  const isBase64 = fileName.endsWith('.mrpro') || fileName.endsWith('.zip');
-                  const content = await FileSystem.readAsStringAsync(fileUri, isBase64 ? { encoding: FileSystem.EncodingType.Base64 } : {});
-                  
-                  const { importMoonReaderData } = require('../utils/storage');
-                  await importMoonReaderData(content, fileName);
-                  Alert.alert('Success', 'Imported books from Moon+ Reader backup.');
+                const hasPermission = await checkAndRequestStorageAccess();
+                
+                const performImport = async () => {
+                  const DocumentPicker = require('expo-document-picker');
+                  const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+                  if (!result.canceled && result.assets && result.assets.length > 0) {
+                    const fileUri = result.assets[0].uri;
+                    const fileName = result.assets[0].name.toLowerCase();
+                    
+                    const isBase64 = fileName.endsWith('.mrpro') || fileName.endsWith('.zip');
+                    const content = await FileSystem.readAsStringAsync(fileUri, isBase64 ? { encoding: FileSystem.EncodingType.Base64 } : {});
+                    
+                    const { importMoonReaderData } = require('../utils/storage');
+                    await importMoonReaderData(content, fileName);
+                    Alert.alert('Success', 'Imported books from Moon+ Reader backup.');
+                  }
+                };
+
+                if (!hasPermission) {
+                  Alert.alert(
+                    "Permission Required",
+                    "Without storage permission, you can import the backup but you will not be able to read any books located on your device storage.\n\nDo you still want to proceed?",
+                    [
+                      { text: "Cancel", style: "cancel", onPress: () => setIsPicking(false) },
+                      { text: "Proceed", onPress: async () => {
+                          try {
+                            await performImport();
+                          } catch(err) {
+                            Alert.alert('Error', err.message);
+                          } finally {
+                            setIsPicking(false);
+                          }
+                        } 
+                      }
+                    ]
+                  );
+                  return;
                 }
+                
+                await performImport();
               } catch (e) {
                 console.error(e);
                 Alert.alert('Error', 'Could not import file: ' + e.message);

@@ -23,6 +23,7 @@ import {
   getBooks 
 } from '../utils/storage';
 import SettingsDrawer from '../components/SettingsDrawer';
+import { checkAndRequestStorageAccess } from '../utils/permissions';
 
 export default function BookmarksScreen({ navigation }) {
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -139,11 +140,21 @@ export default function BookmarksScreen({ navigation }) {
     );
   };
 
-  const handleNotePress = (item) => {
+  const handleNotePress = async (item) => {
     if (item.bookId) {
       // Find book details in library
       const matched = libraryBooks.find(b => b.id === item.bookId);
       if (matched) {
+         if (matched.uri && matched.uri.startsWith('file:///storage/emulated/0/')) {
+            const hasPermission = await checkAndRequestStorageAccess();
+            if (!hasPermission) {
+               Alert.alert(
+                  "Permission Required",
+                  "SmartReader AI needs storage permission to access books stored outside the application sandbox directory. Please grant the permission in settings to open this book."
+               );
+               return;
+            }
+         }
          navigation.navigate('Reader', { book: matched });
       } else {
          Alert.alert('Book Not Found', 'This note is linked to a book that is no longer in your library.');

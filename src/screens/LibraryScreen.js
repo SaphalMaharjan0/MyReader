@@ -26,6 +26,7 @@ import * as fflate from 'fflate';
 import { COLORS, SIZES } from '../constants/theme';
 import { getBooks, saveBook, removeBook, updateBook } from '../utils/storage';
 import SettingsDrawer from '../components/SettingsDrawer';
+import { checkAndRequestStorageAccess } from '../utils/permissions';
 
 export default function LibraryScreen({ navigation }) {
    const [books, setBooks] = useState([]);
@@ -524,6 +525,20 @@ export default function LibraryScreen({ navigation }) {
       );
    };
 
+   const handleOpenBook = async (book) => {
+      if (book.uri && book.uri.startsWith('file:///storage/emulated/0/')) {
+         const hasPermission = await checkAndRequestStorageAccess();
+         if (!hasPermission) {
+            Alert.alert(
+               "Permission Required",
+               "SmartReader AI needs storage permission to access books stored outside the application sandbox directory. Please grant the permission in settings to open this book."
+            );
+            return;
+         }
+      }
+      navigation.navigate('Reader', { book });
+   };
+
    const getGradientColors = (title) => {
       const colors = [
          ['#2b5876', '#4e4376'],
@@ -550,7 +565,7 @@ export default function LibraryScreen({ navigation }) {
       return (
          <TouchableOpacity
             style={{ width: '31%', marginHorizontal: '1.1%', marginBottom: 15 }}
-            onPress={() => navigation.navigate('Reader', { book: item })}
+            onPress={() => handleOpenBook(item)}
             onLongPress={() => handleBookOptions(item)}
          >
             <View style={[styles.bookCard, { width: '100%' }]}>
@@ -881,7 +896,7 @@ export default function LibraryScreen({ navigation }) {
                            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#2A2A2A' }}
                            onPress={() => {
                               setOptionsModalVisible(false);
-                              navigation.navigate('Reader', { book: selectedOptionBook });
+                              handleOpenBook(selectedOptionBook);
                            }}
                         >
                            <Ionicons name="book-outline" size={24} color="#3a7bd5" style={{ marginRight: 15 }} />
