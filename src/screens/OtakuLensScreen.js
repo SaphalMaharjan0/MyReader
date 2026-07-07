@@ -20,6 +20,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { COLORS } from '../constants/theme';
 import { getSettings, subscribeToSettings } from '../utils/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { WebView } from 'react-native-webview';
 
 export default function OtakuLensScreen() {
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -891,6 +892,35 @@ export default function OtakuLensScreen() {
                 <Text style={styles.romajiSubtitle}>{animeDetails.title.romaji}</Text>
               )}
 
+              {searchMode === 'anime' && animeMatch.video ? (
+                <View style={styles.videoPlayerContainer}>
+                  <Text style={styles.videoSectionTitle}>SCENE VIDEO PREVIEW</Text>
+                  <View style={[styles.videoFrame, { borderColor: isDarkMode ? '#2A2A2A' : '#E0E0E0' }]}>
+                    <WebView 
+                      source={{ html: `
+                        <html>
+                          <body style="margin:0;padding:0;background-color:#000;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden;">
+                            <video 
+                              src="${animeMatch.video}" 
+                              style="width:100%;height:100%;object-fit:contain;" 
+                              controls 
+                              autoplay 
+                              loop 
+                              muted 
+                              playsinline
+                            ></video>
+                          </body>
+                        </html>
+                      ` }} 
+                      style={styles.videoWebView}
+                      allowsInlineMediaPlayback={true}
+                      mediaPlaybackRequiresUserAction={false}
+                      scrollEnabled={false}
+                    />
+                  </View>
+                </View>
+              ) : null}
+
               <View style={[styles.divider, { backgroundColor: isDarkMode ? '#2A2A2A' : '#E0E0E0' }]} />
 
               <View style={styles.metaGrid}>
@@ -1518,5 +1548,30 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  videoPlayerContainer: {
+    width: '100%',
+    marginTop: 15,
+    marginBottom: 5,
+  },
+  videoSectionTitle: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#888',
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  videoFrame: {
+    width: '100%',
+    height: 180,
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+  },
+  videoWebView: {
+    flex: 1,
+    backgroundColor: 'transparent',
   },
 });
