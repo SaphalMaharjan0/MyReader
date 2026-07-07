@@ -11,13 +11,15 @@ import {
   Platform, 
   Linking, 
   Animated, 
-  Easing 
+  Easing,
+  TextInput
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { COLORS } from '../constants/theme';
 import { getSettings, subscribeToSettings } from '../utils/storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function OtakuLensScreen() {
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -25,6 +27,9 @@ export default function OtakuLensScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [similarityThreshold, setSimilarityThreshold] = useState(0.6);
+  const [searchMode, setSearchMode] = useState('anime'); // 'anime' | 'manga'
+  const [saucenaoApiKey, setSaucenaoApiKey] = useState('');
+  const [showKeyInput, setShowKeyInput] = useState(false);
   
   // Search results
   const [animeMatch, setAnimeMatch] = useState(null);
@@ -42,6 +47,13 @@ export default function OtakuLensScreen() {
     const loadInitial = async () => {
       const settings = await getSettings();
       if (settings) setIsDarkMode(settings.darkMode);
+      
+      try {
+        const key = await AsyncStorage.getItem('saucenao_api_key');
+        if (key) setSaucenaoApiKey(key);
+      } catch (e) {
+        console.log('Error loading SauceNAO key:', e);
+      }
     };
     loadInitial();
 
@@ -156,6 +168,17 @@ export default function OtakuLensScreen() {
     clearResults();
   };
 
+  const saveSaucenaoKey = async (key) => {
+    try {
+      await AsyncStorage.setItem('saucenao_api_key', key.trim());
+      setSaucenaoApiKey(key.trim());
+      Alert.alert('Saved', 'SauceNAO API key saved successfully.');
+    } catch (e) {
+      console.log('Error saving SauceNAO API key:', e);
+      Alert.alert('Error', 'Failed to save API key.');
+    }
+  };
+
   const formatTimecode = (seconds) => {
     if (!seconds) return '00:00';
     const hrs = Math.floor(seconds / 3600);
@@ -177,74 +200,189 @@ export default function OtakuLensScreen() {
     setError(null);
 
     try {
-      // 1. Prepare form data for trace.moe
-      const formData = new FormData();
-      formData.append('image', {
-        uri: selectedImage,
-        name: 'scene.jpg',
-        type: 'image/jpeg',
-      });
+      if (searchMode === 'anime') {
+        // --- ANIME TRACE.MOE SEARCH FLOW ---
+        const formData = new FormData();
+        formData.append('image', {
+          uri: selectedImage,
+          name: 'scene.jpg',
+          type: 'image/jpeg',
+        });
 
-      // 2. Fetch match from trace.moe API
-      const searchRes = await fetch('https://api.trace.moe/search', {
-        method: 'POST',
-        body: formData,
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+        const searchRes = await fetch('https://api.trace.moe/search', {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'multipart/form-data',
+          },
+        });
 
-      if (!searchRes.ok) {
-        if (searchRes.status === 429) {
-          throw new Error('Too many requests. Please wait a minute and try again.');
+        if (!searchRes.ok) {
+          if (searchRes.status === 429) {
+            throw new Error('Too many requests. Please wait a minute and try again.');
+          }
+          throw new Error('Failed to search anime scene. Please try another image.');
         }
-        throw new Error('Failed to search anime scene. Please try another image.');
-      }
 
-      const matchData = await searchRes.json();
-      if (!matchData.result || matchData.result.length === 0) {
-        throw new Error('No anime scene match found. Try a cleaner screenshot.');
-      }
+        const matchData = await searchRes.json();
+        if (!matchData.result || matchData.result.length === 0) {
+          throw new Error('No anime scene match found. Try a cleaner screenshot.');
+        }
 
-      // Filter matches by similarityThreshold
-      const filteredMatches = matchData.result.filter(m => m.similarity >= similarityThreshold);
-      if (filteredMatches.length === 0) {
-        const bestSim = matchData.result[0].similarity;
-        throw new Error(`Confidence rate too low. The matched scene similarity (${Math.round(bestSim * 1000) / 10}%) is below your selected threshold (${Math.round(similarityThreshold * 100)}%).`);
-      }
+        // Filter matches by similarityThreshold
+        const filteredMatches = matchData.result.filter(m => m.similarity >= similarityThreshold);
+        if (filteredMatches.length === 0) {
+          const bestSim = matchData.result[0].similarity;
+          throw new Error(`Confidence rate too low. The matched scene similarity (${Math.round(bestSim * 1000) / 10}%) is below your selected threshold (${Math.round(similarityThreshold * 100)}%).`);
+        }
 
-      setTraceMatches(filteredMatches);
+        setTraceMatches(filteredMatches);
 
-      // Fetch details for all filtered candidates (up to top 5)
-      const ids = [...new Set(filteredMatches.slice(0, 5).map(m => m.anilist))];
-      const candidates = await fetchAllCandidatesDetails(ids);
-      setCandidatesList(candidates);
+        // Fetch details for all filtered candidates (up to top 5)
+        const ids = [...new Set(filteredMatches.slice(0, 5).map(m => m.anilist))];
+        const candidates = await fetchAllCandidatesDetails(ids);
+        setCandidatesList(candidates);
 
-      // Find the first match candidate that has metadata resolved
-      const firstCandidate = candidates.find(c => c.id === filteredMatches[0].anilist) || candidates[0];
-      if (firstCandidate) {
-        const matchingTraceResult = filteredMatches.find(m => m.anilist === firstCandidate.id);
-        setAnimeMatch(matchingTraceResult || filteredMatches[0]);
-        setAnimeDetails(firstCandidate);
+        // Find the first match candidate that has metadata resolved
+        const firstCandidate = candidates.find(c => c.id === filteredMatches[0].anilist) || candidates[0];
+        if (firstCandidate) {
+          const matchingTraceResult = filteredMatches.find(m => m.anilist === firstCandidate.id);
+          setAnimeMatch(matchingTraceResult || filteredMatches[0]);
+          setAnimeDetails(firstCandidate);
 
-        // Populate source relations
-        if (firstCandidate.relations && firstCandidate.relations.edges) {
-          const sources = firstCandidate.relations.edges
-            .filter(edge => edge.node.type === 'MANGA')
-            .map(edge => ({
-              relation: edge.relationType,
-              ...edge.node
-            }));
-          setSourceMaterial(sources);
+          // Populate source relations
+          if (firstCandidate.relations && firstCandidate.relations.edges) {
+            const sources = firstCandidate.relations.edges
+              .filter(edge => edge.node.type === 'MANGA')
+              .map(edge => ({
+                relation: edge.relationType,
+                ...edge.node
+              }));
+            setSourceMaterial(sources);
+          }
+        } else {
+          // Fallback
+          const bestMatch = filteredMatches[0];
+          setAnimeMatch(bestMatch);
+          await fetchAnilistDetails(bestMatch.anilist);
         }
       } else {
-        // Fallback
-        const bestMatch = filteredMatches[0];
-        setAnimeMatch(bestMatch);
-        await fetchAnilistDetails(bestMatch.anilist);
-      }
+        // --- MANGA SAUCENAO SEARCH FLOW ---
+        const formData = new FormData();
+        formData.append('file', {
+          uri: selectedImage,
+          name: 'manga.jpg',
+          type: 'image/jpeg',
+        });
+        formData.append('output_type', '2'); // JSON output
+        formData.append('numres', '5');       // Retrieve 5 candidates
+        formData.append('db', '999');         // All DBs (manga, pixiv, doujinshi, etc.)
+        if (saucenaoApiKey.trim()) {
+          formData.append('api_key', saucenaoApiKey.trim());
+        }
 
+        const searchRes = await fetch('https://saucenao.com/search.php', {
+          method: 'POST',
+          body: formData,
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+
+        if (!searchRes.ok) {
+          if (searchRes.status === 429) {
+            throw new Error('SauceNAO rate limit reached. Please wait a minute or add a free API Key.');
+          }
+          throw new Error('Failed to reverse search manga. Please try another image.');
+        }
+
+        const matchData = await searchRes.json();
+        
+        // SauceNAO error check
+        if (matchData.header && matchData.header.status !== 0) {
+          throw new Error(matchData.header.message || 'SauceNAO API search error. Verify image or your API Key.');
+        }
+
+        if (!matchData.results || matchData.results.length === 0) {
+          throw new Error('No manga panel match found in SauceNAO database.');
+        }
+
+        // Map SauceNAO response format to matches compatible with our candidate list
+        const convertedMatches = matchData.results.map((res, index) => {
+          const sim = parseFloat(res.header.similarity) / 100;
+          
+          // Ext URL guess or target
+          const extUrl = res.data.ext_urls && res.data.ext_urls.length > 0 ? res.data.ext_urls[0] : '';
+          
+          // Title extraction (SauceNAO returns titles in different keys like source, title, material)
+          const title = res.data.title || res.data.source || res.data.material || 'Unknown Manga';
+          const author = res.data.author || res.data.creator || '';
+          const chapter = res.data.chapter || '';
+          
+          return {
+            anilist: index + 1000000, // mock unique ID since it might not be Anilist directly
+            similarity: sim,
+            filename: res.header.index_name,
+            episode: chapter, // map chapter to episode variable
+            from: title,      // map title to from variable (handy for parsing)
+            to: author,       // map creator to to variable
+            url: extUrl,
+            thumbnail: res.header.thumbnail,
+            rawTitle: title
+          };
+        });
+
+        const filteredMatches = convertedMatches.filter(m => m.similarity >= similarityThreshold);
+        if (filteredMatches.length === 0) {
+          const bestSim = convertedMatches[0].similarity;
+          throw new Error(`Confidence rate too low. The matched manga similarity (${Math.round(bestSim * 100)}%) is below your selected threshold (${Math.round(similarityThreshold * 100)}%).`);
+        }
+
+        setTraceMatches(filteredMatches);
+
+        // Fetch Anilist metadata for these candidates by search title query
+        const candidates = [];
+        for (let i = 0; i < filteredMatches.length; i++) {
+          const match = filteredMatches[i];
+          const queryTitle = match.rawTitle;
+          const anilistInfo = await fetchAnilistByTitle(queryTitle, 'MANGA');
+          
+          candidates.push({
+            id: match.anilist,
+            title: anilistInfo ? anilistInfo.title : { romaji: queryTitle, english: queryTitle },
+            coverImage: anilistInfo ? anilistInfo.coverImage : { large: match.thumbnail },
+            description: anilistInfo ? anilistInfo.description : 'No synopsis available on Anilist.',
+            status: anilistInfo ? anilistInfo.status : 'UNKNOWN',
+            volumes: anilistInfo ? anilistInfo.volumes : 0,
+            chapters: anilistInfo ? anilistInfo.chapters : 0,
+            relations: anilistInfo ? anilistInfo.relations : { edges: [] },
+            url: match.url,
+            isNovel: false
+          });
+        }
+
+        setCandidatesList(candidates);
+
+        // Set primary candidate details
+        if (candidates.length > 0) {
+          setAnimeMatch(filteredMatches[0]);
+          setAnimeDetails(candidates[0]);
+
+          // Set source relations directly as this candidate manga details
+          setSourceMaterial([{
+            id: candidates[0].id,
+            title: candidates[0].title,
+            coverImage: candidates[0].coverImage,
+            description: candidates[0].description,
+            status: candidates[0].status,
+            volumes: candidates[0].volumes,
+            format: 'MANGA',
+            url: candidates[0].url
+          }]);
+        }
+      }
     } catch (err) {
       console.error(err);
       setError(err.message || 'An error occurred during scene identification.');
@@ -329,6 +467,80 @@ export default function OtakuLensScreen() {
     } catch (e) {
       console.log('Error fetching Anilist details:', e);
     }
+  };
+
+  const fetchAnilistByTitle = async (title, type) => {
+    if (!title) return null;
+    
+    // Clean Title from generic words or sub-info to match better on Anilist
+    const cleanedTitle = title
+      .replace(/\s*(?:manga|novel|comic|volume\s*\d+|chap\s*\d+|colou?red|raw)\b/gi, '')
+      .trim();
+
+    const query = `
+      query ($search: String, $type: MediaType) {
+        Media (search: $search, type: $type) {
+          id
+          title {
+            romaji
+            english
+            native
+          }
+          coverImage {
+            large
+            extraLarge
+          }
+          description
+          status
+          volumes
+          chapters
+          relations {
+            edges {
+              relationType
+              node {
+                id
+                title {
+                  romaji
+                  english
+                  native
+                }
+                type
+                format
+                status
+                volumes
+                chapters
+                description
+                coverImage {
+                  large
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    try {
+      const response = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          variables: { search: cleanedTitle || title, type },
+        }),
+      });
+
+      const json = await response.json();
+      if (json.data && json.data.Media) {
+        return json.data.Media;
+      }
+    } catch (e) {
+      console.log('Error fetching Anilist by title:', e);
+    }
+    return null;
   };
 
   const fetchAllCandidatesDetails = async (ids) => {
@@ -509,9 +721,79 @@ export default function OtakuLensScreen() {
         <Ionicons name="scan-circle" size={32} color={COLORS.primary} />
         <Text style={[styles.headerTitle, { color: isDarkMode ? '#FFF' : '#333' }]}>OtakuLens</Text>
         <Text style={styles.headerSub}>Scene Finder & LN Tracker</Text>
+        <TouchableOpacity 
+          style={{ padding: 5, marginLeft: 10 }}
+          onPress={() => setShowKeyInput(!showKeyInput)}
+        >
+          <Ionicons name="key-outline" size={22} color={isDarkMode ? '#FFF' : '#333'} />
+        </TouchableOpacity>
       </View>
 
+      {/* Collapsible API Key Drawer */}
+      {showKeyInput && (
+        <View style={[styles.keyConfigDrawer, { backgroundColor: isDarkMode ? '#1E1E1E' : '#FFFFFF', borderBottomColor: isDarkMode ? '#2A2A2A' : '#E0E0E0' }]}>
+          <Text style={[styles.keyConfigLabel, { color: isDarkMode ? '#FFF' : '#333' }]}>
+            SauceNAO API Key (Manga Search)
+          </Text>
+          <Text style={styles.keyConfigSub}>
+            Optional. SauceNAO limits anonymous searches per day. Put a free API Key here to bypass limits.
+          </Text>
+          <View style={styles.keyInputRow}>
+            <TextInput 
+              style={[
+                styles.keyInput, 
+                { 
+                  color: isDarkMode ? '#FFF' : '#333', 
+                  backgroundColor: isDarkMode ? '#2A2A2A' : '#EAEAEA',
+                  borderColor: isDarkMode ? '#333' : '#CCC'
+                }
+              ]}
+              placeholder="Enter SauceNAO API Key"
+              placeholderTextColor="#888"
+              value={saucenaoApiKey}
+              onChangeText={setSaucenaoApiKey}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity 
+              style={[styles.keySaveBtn, { backgroundColor: COLORS.primary }]}
+              onPress={() => saveSaucenaoKey(saucenaoApiKey)}
+            >
+              <Text style={styles.btnText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+        {/* Search Mode Selector Segmented Control */}
+        <View style={[styles.segmentContainer, { backgroundColor: isDarkMode ? '#1E1E1E' : '#EAEAEA', marginBottom: 15 }]}>
+          <TouchableOpacity 
+            style={[styles.segmentTab, searchMode === 'anime' && { backgroundColor: COLORS.primary }]}
+            onPress={() => {
+              setSearchMode('anime');
+              clearResults();
+            }}
+          >
+            <Ionicons name="film-outline" size={16} color={searchMode === 'anime' ? '#FFF' : (isDarkMode ? '#AAA' : '#555')} style={{ marginRight: 6 }} />
+            <Text style={[styles.segmentText, { color: searchMode === 'anime' ? '#FFF' : (isDarkMode ? '#AAA' : '#333') }]}>
+              Anime Scene
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={[styles.segmentTab, searchMode === 'manga' && { backgroundColor: COLORS.primary }]}
+            onPress={() => {
+              setSearchMode('manga');
+              clearResults();
+            }}
+          >
+            <Ionicons name="book-outline" size={16} color={searchMode === 'manga' ? '#FFF' : (isDarkMode ? '#AAA' : '#555')} style={{ marginRight: 6 }} />
+            <Text style={[styles.segmentText, { color: searchMode === 'manga' ? '#FFF' : (isDarkMode ? '#AAA' : '#333') }]}>
+              Manga Panel / Art
+            </Text>
+          </TouchableOpacity>
+        </View>
         {/* Upload Zone */}
         {!selectedImage ? (
           <View style={[styles.uploadBox, { backgroundColor: isDarkMode ? '#1E1E1E' : '#FFFFFF', borderColor: isDarkMode ? '#333' : '#CCC' }]}>
@@ -594,7 +876,7 @@ export default function OtakuLensScreen() {
               <View style={styles.cardHeaderBadge}>
                 <View style={[styles.badge, animeMatch.similarity < 0.75 && { backgroundColor: 'rgba(230, 126, 34, 0.15)' }]}>
                   <Text style={[styles.badgeText, animeMatch.similarity < 0.75 && { color: '#e67e22' }]}>
-                    {animeMatch.similarity < 0.75 ? 'LOW CONFIDENCE MATCH' : 'ANIME MATCHED'}
+                    {animeMatch.similarity < 0.75 ? 'LOW CONFIDENCE MATCH' : (searchMode === 'anime' ? 'ANIME MATCHED' : 'MANGA MATCHED')}
                   </Text>
                 </View>
                 <Text style={[styles.matchScore, animeMatch.similarity < 0.75 && { color: '#e67e22' }]}>
@@ -613,20 +895,31 @@ export default function OtakuLensScreen() {
 
               <View style={styles.metaGrid}>
                 <View style={styles.metaCol}>
-                  <Text style={styles.metaLabel}>EPISODE</Text>
-                  <Text style={[styles.metaVal, { color: isDarkMode ? '#FFF' : '#333' }]}>
-                    {animeMatch.episode || 'Movie/OVA'}
+                  <Text style={styles.metaLabel}>{searchMode === 'anime' ? 'EPISODE' : 'CHAPTER'}</Text>
+                  <Text style={[styles.metaVal, { color: isDarkMode ? '#FFF' : '#333' }]} numberOfLines={1}>
+                    {searchMode === 'anime' ? (animeMatch.episode || 'Movie/OVA') : (animeMatch.episode || 'Unknown')}
                   </Text>
                 </View>
-                <View style={styles.metaCol}>
-                  <Text style={styles.metaLabel}>TIMECODE</Text>
-                  <Text style={[styles.metaVal, { color: isDarkMode ? '#FFF' : '#333' }]}>
-                    {formatTimecode(animeMatch.from)}
-                  </Text>
-                </View>
+                
+                {searchMode === 'anime' ? (
+                  <View style={styles.metaCol}>
+                    <Text style={styles.metaLabel}>TIMECODE</Text>
+                    <Text style={[styles.metaVal, { color: isDarkMode ? '#FFF' : '#333' }]}>
+                      {formatTimecode(animeMatch.from)}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.metaCol}>
+                    <Text style={styles.metaLabel}>AUTHOR/CREATOR</Text>
+                    <Text style={[styles.metaVal, { color: isDarkMode ? '#FFF' : '#333' }]} numberOfLines={1}>
+                      {animeMatch.to || 'Unknown'}
+                    </Text>
+                  </View>
+                )}
+
                 <View style={styles.metaCol}>
                   <Text style={styles.metaLabel}>STATUS</Text>
-                  <Text style={[styles.metaVal, { color: COLORS.primary }]}>
+                  <Text style={[styles.metaVal, { color: COLORS.primary }]} numberOfLines={1}>
                     {animeDetails.status}
                   </Text>
                 </View>
@@ -668,7 +961,7 @@ export default function OtakuLensScreen() {
                               {Math.round(match.similarity * 1000) / 10}% match
                             </Text>
                             <Text style={styles.alternativeEp}>
-                              Ep {match.episode || 'Movie'}
+                              {searchMode === 'anime' ? `Ep ${match.episode || 'Movie'}` : (match.episode ? `Ch. ${match.episode}` : 'Manga')}
                             </Text>
                           </View>
                         </View>
@@ -680,13 +973,21 @@ export default function OtakuLensScreen() {
             )}
 
             {/* Source Novel / Manga Panel */}
-            <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFF' : '#444' }]}>Source Material & Releases</Text>
+            <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFF' : '#444' }]}>
+              {searchMode === 'anime' ? 'Source Material & Releases' : 'Manga Series & Releases'}
+            </Text>
 
             {sourceMaterial.length === 0 ? (
               <View style={[styles.card, { backgroundColor: isDarkMode ? '#1E1E1E' : '#FFFFFF', alignItems: 'center', padding: 20 }]}>
                 <Ionicons name="book-outline" size={40} color="#666" style={{ marginBottom: 10 }} />
-                <Text style={{ color: isDarkMode ? '#FFF' : '#333', textAlign: 'center', fontWeight: 'bold' }}>No Source Adaptation Found</Text>
-                <Text style={{ color: '#888', textAlign: 'center', fontSize: 12, marginTop: 4 }}>This anime may be an original production without light novel or manga sources.</Text>
+                <Text style={{ color: isDarkMode ? '#FFF' : '#333', textAlign: 'center', fontWeight: 'bold' }}>
+                  {searchMode === 'anime' ? 'No Source Adaptation Found' : 'No Manga Metadata Found'}
+                </Text>
+                <Text style={{ color: '#888', textAlign: 'center', fontSize: 12, marginTop: 4 }}>
+                  {searchMode === 'anime' 
+                    ? 'This anime may be an original production without light novel or manga sources.' 
+                    : 'We could not resolve this manga panel matching details to a database entry.'}
+                </Text>
               </View>
             ) : (
               sourceMaterial.map((source) => {
@@ -1164,5 +1465,58 @@ const styles = StyleSheet.create({
   alternativeEp: {
     fontSize: 10,
     color: '#888',
+  },
+  segmentContainer: {
+    flexDirection: 'row',
+    borderRadius: 10,
+    padding: 4,
+    width: '100%',
+  },
+  segmentTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  keyConfigDrawer: {
+    padding: 15,
+    borderBottomWidth: 1,
+  },
+  keyConfigLabel: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  keyConfigSub: {
+    fontSize: 11,
+    color: '#888',
+    lineHeight: 16,
+    marginBottom: 10,
+  },
+  keyInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  keyInput: {
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    marginRight: 10,
+    fontSize: 13,
+  },
+  keySaveBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
