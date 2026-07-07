@@ -30,6 +30,8 @@ export default function OtakuLensScreen() {
   const [animeMatch, setAnimeMatch] = useState(null);
   const [animeDetails, setAnimeDetails] = useState(null);
   const [sourceMaterial, setSourceMaterial] = useState([]);
+  const [candidatesList, setCandidatesList] = useState([]);
+  const [traceMatches, setTraceMatches] = useState([]);
 
   // Scanning animation
   const scanAnim = useRef(new Animated.Value(0)).current;
@@ -144,6 +146,8 @@ export default function OtakuLensScreen() {
     setAnimeMatch(null);
     setAnimeDetails(null);
     setSourceMaterial([]);
+    setCandidatesList([]);
+    setTraceMatches([]);
     setError(null);
   };
 
@@ -203,15 +207,43 @@ export default function OtakuLensScreen() {
         throw new Error('No anime scene match found. Try a cleaner screenshot.');
       }
 
-      const bestMatch = matchData.result[0];
-      if (bestMatch.similarity < similarityThreshold) {
-        throw new Error(`Confidence rate too low. The matched scene similarity (${Math.round(bestMatch.similarity * 1000) / 10}%) is below your selected threshold (${Math.round(similarityThreshold * 100)}%).`);
+      // Filter matches by similarityThreshold
+      const filteredMatches = matchData.result.filter(m => m.similarity >= similarityThreshold);
+      if (filteredMatches.length === 0) {
+        const bestSim = matchData.result[0].similarity;
+        throw new Error(`Confidence rate too low. The matched scene similarity (${Math.round(bestSim * 1000) / 10}%) is below your selected threshold (${Math.round(similarityThreshold * 100)}%).`);
       }
 
-      setAnimeMatch(bestMatch);
+      setTraceMatches(filteredMatches);
 
-      // 3. Fetch full metadata and original source links from Anilist GraphQL API
-      await fetchAnilistDetails(bestMatch.anilist);
+      // Fetch details for all filtered candidates (up to top 5)
+      const ids = [...new Set(filteredMatches.slice(0, 5).map(m => m.anilist))];
+      const candidates = await fetchAllCandidatesDetails(ids);
+      setCandidatesList(candidates);
+
+      // Find the first match candidate that has metadata resolved
+      const firstCandidate = candidates.find(c => c.id === filteredMatches[0].anilist) || candidates[0];
+      if (firstCandidate) {
+        const matchingTraceResult = filteredMatches.find(m => m.anilist === firstCandidate.id);
+        setAnimeMatch(matchingTraceResult || filteredMatches[0]);
+        setAnimeDetails(firstCandidate);
+
+        // Populate source relations
+        if (firstCandidate.relations && firstCandidate.relations.edges) {
+          const sources = firstCandidate.relations.edges
+            .filter(edge => edge.node.type === 'MANGA')
+            .map(edge => ({
+              relation: edge.relationType,
+              ...edge.node
+            }));
+          setSourceMaterial(sources);
+        }
+      } else {
+        // Fallback
+        const bestMatch = filteredMatches[0];
+        setAnimeMatch(bestMatch);
+        await fetchAnilistDetails(bestMatch.anilist);
+      }
 
     } catch (err) {
       console.error(err);
@@ -296,6 +328,98 @@ export default function OtakuLensScreen() {
       }
     } catch (e) {
       console.log('Error fetching Anilist details:', e);
+    }
+  };
+
+  const fetchAllCandidatesDetails = async (ids) => {
+    if (!ids || ids.length === 0) return [];
+    
+    const query = `
+      query ($ids: [Int]) {
+        Page (page: 1, perPage: 5) {
+          media (id_in: $ids) {
+            id
+            title {
+              romaji
+              english
+              native
+            }
+            coverImage {
+              large
+            }
+            description
+            episodes
+            status
+            genres
+            relations {
+              edges {
+                relationType
+                node {
+                  id
+                  title {
+                    romaji
+                    english
+                    native
+                  }
+                  type
+                  format
+                  status
+                  volumes
+                  chapters
+                  description
+                  coverImage {
+                    large
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    try {
+      const response = await fetch('https://graphql.anilist.co', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          variables: { ids },
+        }),
+      });
+
+      const json = await response.json();
+      if (json.data && json.data.Page && json.data.Page.media) {
+        return json.data.Page.media;
+      }
+    } catch (e) {
+      console.log('Error batch fetching candidate details:', e);
+    }
+    return [];
+  };
+
+  const handleSelectCandidate = (candidateId) => {
+    const candidate = candidatesList.find(c => c.id === candidateId);
+    const traceMatch = traceMatches.find(m => m.anilist === candidateId);
+    if (candidate && traceMatch) {
+      setAnimeMatch(traceMatch);
+      setAnimeDetails(candidate);
+
+      // Populate source relations
+      if (candidate.relations && candidate.relations.edges) {
+        const sources = candidate.relations.edges
+          .filter(edge => edge.node.type === 'MANGA')
+          .map(edge => ({
+            relation: edge.relationType,
+            ...edge.node
+          }));
+        setSourceMaterial(sources);
+      } else {
+        setSourceMaterial([]);
+      }
     }
   };
 
@@ -508,6 +632,52 @@ export default function OtakuLensScreen() {
                 </View>
               </View>
             </View>
+
+            {/* Alternative Matches Section */}
+            {candidatesList.length > 1 && (
+              <View style={{ marginBottom: 20 }}>
+                <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFF' : '#444', marginTop: 10 }]}>
+                  Alternative Matches
+                </Text>
+                
+                <ScrollView horizontal={true} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.alternativesRow}>
+                  {candidatesList.map((candidate) => {
+                    // Skip if currently active
+                    if (candidate.id === animeDetails.id) return null;
+
+                    const match = traceMatches.find(m => m.anilist === candidate.id);
+                    if (!match) return null;
+
+                    return (
+                      <TouchableOpacity 
+                        key={candidate.id}
+                        style={[
+                          styles.alternativeCard, 
+                          { backgroundColor: isDarkMode ? '#1E1E1E' : '#FFFFFF' }
+                        ]}
+                        onPress={() => handleSelectCandidate(candidate.id)}
+                        activeOpacity={0.7}
+                      >
+                        <Image source={{ uri: candidate.coverImage.large }} style={styles.alternativeThumb} resizeMode="cover" />
+                        <View style={styles.alternativeInfo}>
+                          <Text style={[styles.alternativeTitle, { color: isDarkMode ? '#FFF' : '#333' }]} numberOfLines={2}>
+                            {candidate.title.english || candidate.title.romaji}
+                          </Text>
+                          <View style={styles.alternativeMeta}>
+                            <Text style={styles.alternativeConfidence}>
+                              {Math.round(match.similarity * 1000) / 10}% match
+                            </Text>
+                            <Text style={styles.alternativeEp}>
+                              Ep {match.episode || 'Movie'}
+                            </Text>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
 
             {/* Source Novel / Manga Panel */}
             <Text style={[styles.sectionTitle, { color: isDarkMode ? '#FFF' : '#444' }]}>Source Material & Releases</Text>
@@ -949,5 +1119,50 @@ const styles = StyleSheet.create({
   thresholdSegmentText: {
     fontSize: 11,
     fontWeight: '600',
+  },
+  alternativesRow: {
+    flexDirection: 'row',
+    paddingVertical: 5,
+  },
+  alternativeCard: {
+    flexDirection: 'row',
+    width: 260,
+    borderRadius: 12,
+    padding: 8,
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: '#2A2A2A',
+    alignItems: 'center',
+  },
+  alternativeThumb: {
+    width: 45,
+    height: 65,
+    borderRadius: 6,
+    backgroundColor: '#333',
+  },
+  alternativeInfo: {
+    flex: 1,
+    marginLeft: 10,
+    justifyContent: 'center',
+  },
+  alternativeTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    lineHeight: 16,
+  },
+  alternativeMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 6,
+  },
+  alternativeConfidence: {
+    fontSize: 10,
+    color: '#2ecc71',
+    fontWeight: '600',
+  },
+  alternativeEp: {
+    fontSize: 10,
+    color: '#888',
   },
 });
