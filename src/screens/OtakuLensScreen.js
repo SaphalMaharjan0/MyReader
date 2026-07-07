@@ -24,6 +24,7 @@ export default function OtakuLensScreen() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [similarityThreshold, setSimilarityThreshold] = useState(0.6);
   
   // Search results
   const [animeMatch, setAnimeMatch] = useState(null);
@@ -203,8 +204,8 @@ export default function OtakuLensScreen() {
       }
 
       const bestMatch = matchData.result[0];
-      if (bestMatch.similarity < 0.55) {
-        throw new Error('No clear anime match found. Try a cleaner or higher quality screenshot.');
+      if (bestMatch.similarity < similarityThreshold) {
+        throw new Error(`Confidence rate too low. The matched scene similarity (${Math.round(bestMatch.similarity * 1000) / 10}%) is below your selected threshold (${Math.round(similarityThreshold * 100)}%).`);
       }
 
       setAnimeMatch(bestMatch);
@@ -325,6 +326,52 @@ export default function OtakuLensScreen() {
       .trim();
   };
 
+  const renderThresholdController = () => {
+    return (
+      <View style={[styles.thresholdContainer, { borderTopColor: isDarkMode ? '#2A2A2A' : '#E0E0E0' }]}>
+        <View style={styles.thresholdRow}>
+          <Ionicons name="filter-outline" size={16} color={isDarkMode ? '#AAA' : '#666'} />
+          <Text style={[styles.thresholdLabel, { color: isDarkMode ? '#FFF' : '#333' }]}>Match Similarity Threshold</Text>
+          <Text style={styles.thresholdValue}>{Math.round(similarityThreshold * 100)}%</Text>
+        </View>
+        
+        <View style={styles.thresholdButtonsRow}>
+          <TouchableOpacity 
+            style={[styles.thresholdStepBtn, { backgroundColor: isDarkMode ? '#2D2D2D' : '#E0E0E0' }]} 
+            onPress={() => setSimilarityThreshold(Math.max(0.5, parseFloat((similarityThreshold - 0.05).toFixed(2))))}
+          >
+            <Ionicons name="remove" size={18} color={isDarkMode ? '#FFF' : '#333'} />
+          </TouchableOpacity>
+
+          {[0.55, 0.70, 0.85, 1.00].map((val) => (
+            <TouchableOpacity 
+              key={val}
+              style={[
+                styles.thresholdSegmentBtn, 
+                similarityThreshold === val && { backgroundColor: COLORS.primary }
+              ]}
+              onPress={() => setSimilarityThreshold(val)}
+            >
+              <Text style={[
+                styles.thresholdSegmentText, 
+                { color: similarityThreshold === val ? '#FFF' : (isDarkMode ? '#AAA' : '#666') }
+              ]}>
+                {Math.round(val * 100)}%
+              </Text>
+            </TouchableOpacity>
+          ))}
+
+          <TouchableOpacity 
+            style={[styles.thresholdStepBtn, { backgroundColor: isDarkMode ? '#2D2D2D' : '#E0E0E0' }]} 
+            onPress={() => setSimilarityThreshold(Math.min(1.0, parseFloat((similarityThreshold + 0.05).toFixed(2))))}
+          >
+            <Ionicons name="add" size={18} color={isDarkMode ? '#FFF' : '#333'} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
   // Animations values
   const translateY = scanAnim.interpolate({
     inputRange: [0, 1],
@@ -359,6 +406,8 @@ export default function OtakuLensScreen() {
                 <Text style={styles.btnText}>Camera</Text>
               </TouchableOpacity>
             </View>
+
+            {renderThresholdController()}
           </View>
         ) : (
           /* Preview and Action Zone */
@@ -392,6 +441,9 @@ export default function OtakuLensScreen() {
                 <Text style={styles.errorText}>{error}</Text>
               </View>
             )}
+
+            {/* Similarity Threshold Controller */}
+            {!loading && renderThresholdController()}
 
             {/* Buttons */}
             {!loading && (
@@ -847,5 +899,55 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     marginLeft: 6,
+  },
+  thresholdContainer: {
+    width: '100%',
+    marginVertical: 15,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#2A2A2A',
+  },
+  thresholdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  thresholdLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+    marginLeft: 8,
+  },
+  thresholdValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: COLORS.primary,
+  },
+  thresholdButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+  },
+  thresholdStepBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  thresholdSegmentBtn: {
+    flex: 1,
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  thresholdSegmentText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
 });
