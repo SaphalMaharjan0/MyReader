@@ -203,8 +203,8 @@ export default function OtakuLensScreen() {
       }
 
       const bestMatch = matchData.result[0];
-      if (bestMatch.similarity < 0.7) {
-        throw new Error('Confidence rate too low. We could not match this scene with high certainty.');
+      if (bestMatch.similarity < 0.55) {
+        throw new Error('No clear anime match found. Try a cleaner or higher quality screenshot.');
       }
 
       setAnimeMatch(bestMatch);
@@ -416,10 +416,12 @@ export default function OtakuLensScreen() {
             {/* Anime Match Panel */}
             <View style={[styles.card, { backgroundColor: isDarkMode ? '#1E1E1E' : '#FFFFFF' }]}>
               <View style={styles.cardHeaderBadge}>
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>ANIME MATCHED</Text>
+                <View style={[styles.badge, animeMatch.similarity < 0.75 && { backgroundColor: 'rgba(230, 126, 34, 0.15)' }]}>
+                  <Text style={[styles.badgeText, animeMatch.similarity < 0.75 && { color: '#e67e22' }]}>
+                    {animeMatch.similarity < 0.75 ? 'LOW CONFIDENCE MATCH' : 'ANIME MATCHED'}
+                  </Text>
                 </View>
-                <Text style={styles.matchScore}>
+                <Text style={[styles.matchScore, animeMatch.similarity < 0.75 && { color: '#e67e22' }]}>
                   {Math.round(animeMatch.similarity * 1000) / 10}% confidence
                 </Text>
               </View>
