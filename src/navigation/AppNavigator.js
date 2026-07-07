@@ -12,6 +12,7 @@ import LibraryScreen from '../screens/LibraryScreen';
 import ReaderScreen from '../screens/ReaderScreen';
 import BookmarksScreen from '../screens/BookmarksScreen';
 import FilesScreen from '../screens/FilesScreen';
+import OtakuLensScreen from '../screens/OtakuLensScreen';
 import CustomizeToolbarScreen from '../screens/CustomizeToolbarScreen';
 
 const Stack = createNativeStackNavigator();
@@ -50,6 +51,8 @@ function TabNavigator() {
             iconName = focused ? 'bookmarks' : 'bookmarks-outline';
           } else if (route.name === 'Files') {
             iconName = focused ? 'folder' : 'folder-outline';
+          } else if (route.name === 'OtakuLens') {
+            iconName = focused ? 'scan-circle' : 'scan-circle-outline';
           }
 
           return <Ionicons name={iconName} size={size} color={color} />;
@@ -68,6 +71,7 @@ function TabNavigator() {
       <Tab.Screen name="Library" component={LibraryScreen} />
       <Tab.Screen name="Bookmarks" component={BookmarksScreen} />
       <Tab.Screen name="Files" component={FilesScreen} />
+      <Tab.Screen name="OtakuLens" component={OtakuLensScreen} options={{ tabBarLabel: 'OtakuLens' }} />
     </Tab.Navigator>
   );
 }
