@@ -9,6 +9,7 @@ import { getToolbarConfig } from '../utils/toolbarStore';
 import { updateBook, getSettings } from '../utils/storage';
 import * as Speech from 'expo-speech';
 import { TextInput } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const HTML_CONTENT = `
   <!DOCTYPE html>
@@ -805,6 +806,10 @@ export default function ReaderScreen({ route, navigation }) {
   const [currentTtsIndex, setCurrentTtsIndex] = useState(0);
   const [ttsSpeed, setTtsSpeed] = useState(1.0);
   const [ttsPitch, setTtsPitch] = useState(1.0);
+  const [availableVoices, setAvailableVoices] = useState([]);
+  const [selectedVoice, setSelectedVoice] = useState(null);
+  const [voiceListVisible, setVoiceListVisible] = useState(false);
+  const [voiceSearchQuery, setVoiceSearchQuery] = useState('');
 
   const quickActions = toolbarConfig.slice(0, 4);
   const moreActions = toolbarConfig.slice(4);
@@ -862,6 +867,27 @@ export default function ReaderScreen({ route, navigation }) {
     return () => {
       Speech.stop();
     };
+  }, []);
+
+  useEffect(() => {
+    const loadVoices = async () => {
+      try {
+        const voices = await Speech.getAvailableVoicesAsync();
+        const sortedVoices = voices.sort((a, b) => a.language.localeCompare(b.language));
+        setAvailableVoices(sortedVoices);
+        
+        const savedVoice = await AsyncStorage.getItem('tts_voice_identifier');
+        if (savedVoice && sortedVoices.some(v => v.identifier === savedVoice)) {
+          setSelectedVoice(savedVoice);
+        } else if (sortedVoices.length > 0) {
+          const enVoice = sortedVoices.find(v => v.language.startsWith('en'));
+          setSelectedVoice(enVoice ? enVoice.identifier : sortedVoices[0].identifier);
+        }
+      } catch (e) {
+        console.log('Error getting voices:', e);
+      }
+    };
+    loadVoices();
   }, []);
 
   useEffect(() => {
@@ -944,7 +970,7 @@ export default function ReaderScreen({ route, navigation }) {
     }
   };
 
-  const playTts = (paragraphs, index, rateOverride = ttsSpeed, pitchOverride = ttsPitch) => {
+  const playTts = (paragraphs, index, rateOverride = ttsSpeed, pitchOverride = ttsPitch, voiceOverride = selectedVoice) => {
     if (!paragraphs || paragraphs.length === 0) {
       Alert.alert('Text-to-Speech', 'No readable text could be extracted from this page.');
       setTtsPlaying(false);
@@ -958,9 +984,10 @@ export default function ReaderScreen({ route, navigation }) {
       Speech.speak(paragraphs[index], {
         rate: rateOverride,
         pitch: pitchOverride,
+        voice: voiceOverride || undefined,
         onDone: () => {
           setCurrentTtsIndex(index + 1);
-          playTts(paragraphs, index + 1, rateOverride, pitchOverride);
+          playTts(paragraphs, index + 1, rateOverride, pitchOverride, voiceOverride);
         },
         onError: (err) => {
           console.log('TTS playback callback error:', err);
@@ -977,6 +1004,13 @@ export default function ReaderScreen({ route, navigation }) {
   const stopTts = () => {
     Speech.stop();
     setTtsPlaying(false);
+  };
+
+  const getVoiceName = (id) => {
+    if (!id) return 'Default Voice';
+    const voice = availableVoices.find(v => v.identifier === id);
+    if (!voice) return 'Default Voice';
+    return `${voice.name} (${voice.language})`;
   };
 
   const handleTtsSettingChange = (type, action) => {
@@ -1298,7 +1332,7 @@ export default function ReaderScreen({ route, navigation }) {
               </TouchableOpacity>
           </View>
 
-          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
+          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
               <Text style={{color: COLORS.text, width: 60}}>Pitch</Text>
               <TouchableOpacity onPress={() => handleTtsSettingChange('pitch', 'down')}>
                   <Ionicons name="remove-circle-outline" size={32} color={COLORS.primary} />
@@ -1308,8 +1342,97 @@ export default function ReaderScreen({ route, navigation }) {
                   <Ionicons name="add-circle-outline" size={32} color={COLORS.primary} />
               </TouchableOpacity>
           </View>
+
+          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
+              <Text style={{color: COLORS.text, width: 60}}>Voice</Text>
+              <TouchableOpacity 
+                onPress={() => setVoiceListVisible(true)} 
+                style={{flex: 1, marginLeft: 15, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: themeMode === 'dark' ? '#2A2A2A' : '#EAEAEA', borderRadius: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}
+              >
+                  <Text style={{color: COLORS.text, fontSize: 13, flex: 1, marginRight: 5}} numberOfLines={1}>
+                      {getVoiceName(selectedVoice)}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color={COLORS.primary} />
+              </TouchableOpacity>
+          </View>
         </View>
       )}
+
+      {/* Voice List Modal */}
+      <Modal visible={voiceListVisible} transparent={true} animationType="slide" onRequestClose={() => setVoiceListVisible(false)}>
+        <View style={{flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center'}}>
+          <View style={{width: '90%', height: '70%', backgroundColor: themeMode === 'dark' ? '#1E1E1E' : '#FFFFFF', borderRadius: 20, padding: 20}}>
+            <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15}}>
+              <Text style={{color: themeMode === 'dark' ? '#FFF' : '#333', fontWeight: 'bold', fontSize: 18}}>Select Voice</Text>
+              <TouchableOpacity onPress={() => setVoiceListVisible(false)}>
+                <Ionicons name="close-circle" size={32} color={themeMode === 'dark' ? '#FFF' : '#333'} />
+              </TouchableOpacity>
+            </View>
+            
+            <TextInput 
+              style={{
+                height: 40,
+                backgroundColor: themeMode === 'dark' ? '#2A2A2A' : '#EAEAEA',
+                color: themeMode === 'dark' ? '#FFF' : '#333',
+                borderRadius: 8,
+                paddingHorizontal: 12,
+                marginBottom: 15,
+                fontSize: 14
+              }}
+              placeholder="Search by name or language..."
+              placeholderTextColor="#888"
+              value={voiceSearchQuery}
+              onChangeText={setVoiceSearchQuery}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+
+            <FlatList 
+              data={availableVoices.filter(v => {
+                const query = voiceSearchQuery.toLowerCase();
+                return v.name.toLowerCase().includes(query) || v.language.toLowerCase().includes(query);
+              })}
+              keyExtractor={(item) => item.identifier}
+              renderItem={({ item }) => {
+                const isSelected = selectedVoice === item.identifier;
+                return (
+                  <TouchableOpacity 
+                    style={{
+                      paddingVertical: 12,
+                      paddingHorizontal: 15,
+                      borderBottomWidth: 1,
+                      borderBottomColor: themeMode === 'dark' ? '#2A2A2A' : '#EAEAEA',
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      backgroundColor: isSelected ? (themeMode === 'dark' ? 'rgba(58, 123, 213, 0.15)' : 'rgba(58, 123, 213, 0.1)') : 'transparent'
+                    }}
+                    onPress={async () => {
+                      setSelectedVoice(item.identifier);
+                      setVoiceListVisible(false);
+                      try {
+                        await AsyncStorage.setItem('tts_voice_identifier', item.identifier);
+                      } catch (e) {}
+                      if (ttsPlaying) {
+                        Speech.stop();
+                        setTimeout(() => {
+                          playTts(ttsParagraphs, currentTtsIndex, ttsSpeed, ttsPitch, item.identifier);
+                        }, 100);
+                      }
+                    }}
+                  >
+                    <View style={{flex: 1, marginRight: 10}}>
+                      <Text style={{color: themeMode === 'dark' ? '#FFF' : '#333', fontWeight: isSelected ? 'bold' : 'normal', fontSize: 15}}>{item.name}</Text>
+                      <Text style={{color: '#888', fontSize: 12, marginTop: 2}}>{item.language} • {item.quality || 'Default'}</Text>
+                    </View>
+                    {isSelected && <Ionicons name="checkmark" size={20} color={COLORS.primary} />}
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        </View>
+      </Modal>
 
       {/* Search Modal */}
       <Modal visible={searchVisible} animationType="slide" onRequestClose={() => setSearchVisible(false)}>
