@@ -806,6 +806,7 @@ export default function ReaderScreen({ route, navigation }) {
   const [currentTtsIndex, setCurrentTtsIndex] = useState(0);
   const [ttsSpeed, setTtsSpeed] = useState(1.0);
   const [ttsPitch, setTtsPitch] = useState(1.0);
+  const [ttsVolume, setTtsVolume] = useState(1.0);
   const [availableVoices, setAvailableVoices] = useState([]);
   const [selectedVoice, setSelectedVoice] = useState(null);
   const [voiceListVisible, setVoiceListVisible] = useState(false);
@@ -970,7 +971,7 @@ export default function ReaderScreen({ route, navigation }) {
     }
   };
 
-  const playTts = (paragraphs, index, rateOverride = ttsSpeed, pitchOverride = ttsPitch, voiceOverride = selectedVoice) => {
+  const playTts = (paragraphs, index, rateOverride = ttsSpeed, pitchOverride = ttsPitch, voiceOverride = selectedVoice, volumeOverride = ttsVolume) => {
     if (!paragraphs || paragraphs.length === 0) {
       Alert.alert('Text-to-Speech', 'No readable text could be extracted from this page.');
       setTtsPlaying(false);
@@ -985,9 +986,10 @@ export default function ReaderScreen({ route, navigation }) {
         rate: rateOverride,
         pitch: pitchOverride,
         voice: voiceOverride || undefined,
+        volume: volumeOverride,
         onDone: () => {
           setCurrentTtsIndex(index + 1);
-          playTts(paragraphs, index + 1, rateOverride, pitchOverride, voiceOverride);
+          playTts(paragraphs, index + 1, rateOverride, pitchOverride, voiceOverride, volumeOverride);
         },
         onError: (err) => {
           console.log('TTS playback callback error:', err);
@@ -1013,22 +1015,99 @@ export default function ReaderScreen({ route, navigation }) {
     return `${voice.name} (${voice.language})`;
   };
 
-  const handleTtsSettingChange = (type, action) => {
-      let newVal;
-      if (type === 'speed') {
-          newVal = action === 'up' ? Math.min(2.0, ttsSpeed + 0.25) : Math.max(0.5, ttsSpeed - 0.25);
-          setTtsSpeed(newVal);
-      } else {
-          newVal = action === 'up' ? Math.min(2.0, ttsPitch + 0.1) : Math.max(0.5, ttsPitch - 0.1);
-          setTtsPitch(newVal);
-      }
-      
+  const getFilteredVoices = () => {
+    const list = [...availableVoices];
+    const defaultVoiceObj = {
+      identifier: 'default',
+      name: 'System Default Voice',
+      language: 'Default Language',
+      quality: 'System'
+    };
+    
+    const query = voiceSearchQuery.toLowerCase().trim();
+    const filtered = list.filter(v => 
+      v.name.toLowerCase().includes(query) || v.language.toLowerCase().includes(query)
+    );
+    
+    if (!query || 'default voice system'.includes(query)) {
+      filtered.unshift(defaultVoiceObj);
+    }
+    return filtered;
+  };
+
+  const updateTtsSetting = (type, newVal) => {
+    if (type === 'speed') {
+      setTtsSpeed(newVal);
       if (ttsPlaying) {
-          Speech.stop();
-          setTimeout(() => {
-              playTts(ttsParagraphs, currentTtsIndex, type === 'speed' ? newVal : ttsSpeed, type === 'pitch' ? newVal : ttsPitch);
-          }, 100);
+        Speech.stop();
+        setTimeout(() => {
+          playTts(ttsParagraphs, currentTtsIndex, newVal, ttsPitch, selectedVoice, ttsVolume);
+        }, 100);
       }
+    } else if (type === 'pitch') {
+      setTtsPitch(newVal);
+      if (ttsPlaying) {
+        Speech.stop();
+        setTimeout(() => {
+          playTts(ttsParagraphs, currentTtsIndex, ttsSpeed, newVal, selectedVoice, ttsVolume);
+        }, 100);
+      }
+    } else if (type === 'volume') {
+      setTtsVolume(newVal);
+      if (ttsPlaying) {
+        Speech.stop();
+        setTimeout(() => {
+          playTts(ttsParagraphs, currentTtsIndex, ttsSpeed, ttsPitch, selectedVoice, newVal);
+        }, 100);
+      }
+    }
+  };
+
+  const renderSliderRow = (label, value, min, max, step, onChange) => {
+    const percentage = ((value - min) / (max - min)) * 100;
+    
+    const handleBarPress = (event) => {
+      const { locationX } = event.nativeEvent;
+      const barWidth = 160;
+      const ratio = Math.max(0, Math.min(1, locationX / barWidth));
+      const rawVal = min + ratio * (max - min);
+      const steppedVal = Math.round(rawVal / step) * step;
+      onChange(Math.max(min, Math.min(max, parseFloat(steppedVal.toFixed(2)))));
+    };
+
+    return (
+      <View style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: 8, paddingHorizontal: 5}}>
+        <Text style={{color: COLORS.text, width: 100, fontSize: 14, fontWeight: '500'}}>{label}</Text>
+        
+        {/* Slider Bar Container */}
+        <TouchableOpacity 
+          activeOpacity={1}
+          onPress={handleBarPress}
+          style={{width: 160, height: 20, justifyContent: 'center', marginRight: 10}}
+        >
+          <View style={{height: 3, backgroundColor: themeMode === 'dark' ? '#333' : '#CCC', borderRadius: 2, width: '100%'}}>
+            <View style={{height: '100%', backgroundColor: COLORS.primary, borderRadius: 2, width: `${percentage}%`}} />
+          </View>
+          <View style={{position: 'absolute', left: `${percentage}%`, marginLeft: -8, width: 16, height: 16, borderRadius: 8, backgroundColor: '#FFFFFF', elevation: 3, shadowColor: '#000', shadowOffset: {width:0, height:1}, shadowOpacity:0.25, shadowRadius:1.5}} />
+        </TouchableOpacity>
+
+        {/* Buttons */}
+        <View style={{flexDirection: 'row', alignItems: 'center', width: 60, justifyContent: 'flex-end'}}>
+          <TouchableOpacity 
+            onPress={() => onChange(Math.max(min, parseFloat((value - step).toFixed(2))))}
+            style={{paddingHorizontal: 8, paddingVertical: 4}}
+          >
+            <Text style={{color: COLORS.text, fontSize: 20, fontWeight: 'bold'}}>-</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            onPress={() => onChange(Math.min(max, parseFloat((value + step).toFixed(2))))}
+            style={{paddingHorizontal: 8, paddingVertical: 4, marginLeft: 5}}
+          >
+            <Text style={{color: COLORS.text, fontSize: 20, fontWeight: 'bold'}}>+</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
   };
 
   useEffect(() => {
@@ -1299,60 +1378,133 @@ export default function ReaderScreen({ route, navigation }) {
 
       {/* TTS Overlay */}
       {ttsVisible && (
-        <View style={{position: 'absolute', bottom: 80, alignSelf: 'center', backgroundColor: COLORS.card, padding: 15, borderRadius: 20, width: '90%', zIndex: 100, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84}}>
+        <View style={{position: 'absolute', bottom: 80, alignSelf: 'center', backgroundColor: COLORS.card, padding: 15, borderRadius: 20, width: '92%', zIndex: 100, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 3.84}}>
           <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15}}>
               <Text style={{color: COLORS.text, fontWeight: 'bold', fontSize: 18}}>Text to Speech</Text>
-              <TouchableOpacity onPress={() => { setTtsVisible(false); stopTts(); }}>
+              <TouchableOpacity onPress={() => setTtsVisible(false)}>
                 <Ionicons name="close-circle" size={32} color={COLORS.text} />
               </TouchableOpacity>
           </View>
 
-          <View style={{flexDirection: 'row', justifyContent: 'center', marginBottom: 15}}>
-              <TouchableOpacity onPress={() => {
-                if (ttsPlaying) { 
-                    Speech.stop(); 
-                    setTtsPlaying(false); 
-                } else { 
-                    setTtsPlaying(true); 
-                    playTts(ttsParagraphs, currentTtsIndex); 
-                }
-              }}>
-                <Ionicons name={ttsPlaying ? "pause-circle" : "play-circle"} size={64} color={COLORS.primary} />
-              </TouchableOpacity>
+          {/* Sliders Container */}
+          <View style={{marginBottom: 10}}>
+            {renderSliderRow('Volume', ttsVolume, 0.0, 1.0, 0.05, (val) => updateTtsSetting('volume', val))}
+            {renderSliderRow('Pitch(Tone)', ttsPitch, 0.5, 2.0, 0.1, (val) => updateTtsSetting('pitch', val))}
+            {renderSliderRow('Speed', ttsSpeed, 0.5, 2.0, 0.1, (val) => updateTtsSetting('speed', val))}
           </View>
 
-          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
-              <Text style={{color: COLORS.text, width: 60}}>Speed</Text>
-              <TouchableOpacity onPress={() => handleTtsSettingChange('speed', 'down')}>
-                  <Ionicons name="remove-circle-outline" size={32} color={COLORS.primary} />
+          {/* Controls Bar */}
+          <View style={{flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', marginTop: 10, borderTopWidth: 1, borderTopColor: themeMode === 'dark' ? '#2A2A2A' : '#EAEAEA', paddingTop: 15}}>
+              {/* Stop Button */}
+              <TouchableOpacity onPress={stopTts} style={{padding: 5}}>
+                <Ionicons name="square" size={24} color={COLORS.text} />
               </TouchableOpacity>
-              <Text style={{color: COLORS.text, width: 50, textAlign: 'center'}}>{ttsSpeed.toFixed(2)}x</Text>
-              <TouchableOpacity onPress={() => handleTtsSettingChange('speed', 'up')}>
-                  <Ionicons name="add-circle-outline" size={32} color={COLORS.primary} />
-              </TouchableOpacity>
-          </View>
 
-          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
-              <Text style={{color: COLORS.text, width: 60}}>Pitch</Text>
-              <TouchableOpacity onPress={() => handleTtsSettingChange('pitch', 'down')}>
-                  <Ionicons name="remove-circle-outline" size={32} color={COLORS.primary} />
-              </TouchableOpacity>
-              <Text style={{color: COLORS.text, width: 50, textAlign: 'center'}}>{ttsPitch.toFixed(1)}</Text>
-              <TouchableOpacity onPress={() => handleTtsSettingChange('pitch', 'up')}>
-                  <Ionicons name="add-circle-outline" size={32} color={COLORS.primary} />
-              </TouchableOpacity>
-          </View>
-
-          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}>
-              <Text style={{color: COLORS.text, width: 60}}>Voice</Text>
+              {/* Skip Back */}
               <TouchableOpacity 
-                onPress={() => setVoiceListVisible(true)} 
-                style={{flex: 1, marginLeft: 15, paddingVertical: 8, paddingHorizontal: 12, backgroundColor: themeMode === 'dark' ? '#2A2A2A' : '#EAEAEA', borderRadius: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center'}}
+                onPress={() => {
+                  if (currentTtsIndex > 0) {
+                    const prevIdx = currentTtsIndex - 1;
+                    setCurrentTtsIndex(prevIdx);
+                    if (ttsPlaying) {
+                      Speech.stop();
+                      setTimeout(() => {
+                        playTts(ttsParagraphs, prevIdx);
+                      }, 100);
+                    }
+                  }
+                }}
+                style={{padding: 5}}
               >
-                  <Text style={{color: COLORS.text, fontSize: 13, flex: 1, marginRight: 5}} numberOfLines={1}>
-                      {getVoiceName(selectedVoice)}
-                  </Text>
-                  <Ionicons name="chevron-down" size={16} color={COLORS.primary} />
+                <Ionicons name="play-skip-back" size={24} color={currentTtsIndex > 0 ? COLORS.text : (themeMode === 'dark' ? '#444' : '#CCC')} />
+              </TouchableOpacity>
+
+              {/* Rewind */}
+              <TouchableOpacity 
+                onPress={() => {
+                  if (currentTtsIndex > 0) {
+                    const prevIdx = currentTtsIndex - 1;
+                    setCurrentTtsIndex(prevIdx);
+                    if (ttsPlaying) {
+                      Speech.stop();
+                      setTimeout(() => {
+                        playTts(ttsParagraphs, prevIdx);
+                      }, 100);
+                    }
+                  }
+                }}
+                style={{padding: 5}}
+              >
+                <Ionicons name="play-back" size={24} color={currentTtsIndex > 0 ? COLORS.text : (themeMode === 'dark' ? '#444' : '#CCC')} />
+              </TouchableOpacity>
+
+              {/* Play / Pause Toggle */}
+              <TouchableOpacity 
+                onPress={() => {
+                  if (ttsPlaying) {
+                    Speech.stop();
+                    setTtsPlaying(false);
+                  } else {
+                    setTtsPlaying(true);
+                    playTts(ttsParagraphs, currentTtsIndex);
+                  }
+                }}
+                style={{padding: 5}}
+              >
+                <Ionicons name={ttsPlaying ? "pause" : "play"} size={32} color={COLORS.primary} />
+              </TouchableOpacity>
+
+              {/* Fast Forward */}
+              <TouchableOpacity 
+                onPress={() => {
+                  if (currentTtsIndex < ttsParagraphs.length - 1) {
+                    const nextIdx = currentTtsIndex + 1;
+                    setCurrentTtsIndex(nextIdx);
+                    if (ttsPlaying) {
+                      Speech.stop();
+                      setTimeout(() => {
+                        playTts(ttsParagraphs, nextIdx);
+                      }, 100);
+                    }
+                  }
+                }}
+                style={{padding: 5}}
+              >
+                <Ionicons name="play-forward" size={24} color={currentTtsIndex < ttsParagraphs.length - 1 ? COLORS.text : (themeMode === 'dark' ? '#444' : '#CCC')} />
+              </TouchableOpacity>
+
+              {/* Skip Forward */}
+              <TouchableOpacity 
+                onPress={() => {
+                  if (currentTtsIndex < ttsParagraphs.length - 1) {
+                    const nextIdx = currentTtsIndex + 1;
+                    setCurrentTtsIndex(nextIdx);
+                    if (ttsPlaying) {
+                      Speech.stop();
+                      setTimeout(() => {
+                        playTts(ttsParagraphs, nextIdx);
+                      }, 100);
+                    }
+                  }
+                }}
+                style={{padding: 5}}
+              >
+                <Ionicons name="play-skip-forward" size={24} color={currentTtsIndex < ttsParagraphs.length - 1 ? COLORS.text : (themeMode === 'dark' ? '#444' : '#CCC')} />
+              </TouchableOpacity>
+
+              {/* Settings (Voice Picker) */}
+              <TouchableOpacity onPress={() => setVoiceListVisible(true)} style={{padding: 5}}>
+                <Ionicons name="settings" size={24} color={COLORS.text} />
+              </TouchableOpacity>
+
+              {/* Ellipsis / Status */}
+              <TouchableOpacity 
+                onPress={() => {
+                  Alert.alert('TTS Status', `Currently playing sentence ${currentTtsIndex + 1} of ${ttsParagraphs.length || 0}.\nSelected Voice: ${getVoiceName(selectedVoice)}`);
+                }}
+                style={{padding: 5}}
+              >
+                <Ionicons name="ellipsis-horizontal" size={24} color={COLORS.text} />
               </TouchableOpacity>
           </View>
         </View>
@@ -1388,13 +1540,10 @@ export default function ReaderScreen({ route, navigation }) {
             />
 
             <FlatList 
-              data={availableVoices.filter(v => {
-                const query = voiceSearchQuery.toLowerCase();
-                return v.name.toLowerCase().includes(query) || v.language.toLowerCase().includes(query);
-              })}
+              data={getFilteredVoices()}
               keyExtractor={(item) => item.identifier}
               renderItem={({ item }) => {
-                const isSelected = selectedVoice === item.identifier;
+                const isSelected = (selectedVoice === null && item.identifier === 'default') || selectedVoice === item.identifier;
                 return (
                   <TouchableOpacity 
                     style={{
@@ -1408,15 +1557,22 @@ export default function ReaderScreen({ route, navigation }) {
                       backgroundColor: isSelected ? (themeMode === 'dark' ? 'rgba(58, 123, 213, 0.15)' : 'rgba(58, 123, 213, 0.1)') : 'transparent'
                     }}
                     onPress={async () => {
-                      setSelectedVoice(item.identifier);
+                      if (item.identifier === 'default') {
+                        setSelectedVoice(null);
+                        try {
+                          await AsyncStorage.removeItem('tts_voice_identifier');
+                        } catch (e) {}
+                      } else {
+                        setSelectedVoice(item.identifier);
+                        try {
+                          await AsyncStorage.setItem('tts_voice_identifier', item.identifier);
+                        } catch (e) {}
+                      }
                       setVoiceListVisible(false);
-                      try {
-                        await AsyncStorage.setItem('tts_voice_identifier', item.identifier);
-                      } catch (e) {}
                       if (ttsPlaying) {
                         Speech.stop();
                         setTimeout(() => {
-                          playTts(ttsParagraphs, currentTtsIndex, ttsSpeed, ttsPitch, item.identifier);
+                          playTts(ttsParagraphs, currentTtsIndex, ttsSpeed, ttsPitch, item.identifier === 'default' ? null : item.identifier);
                         }, 100);
                       }
                     }}
