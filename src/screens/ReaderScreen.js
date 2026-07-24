@@ -156,11 +156,32 @@ const HTML_CONTENT = `
                        var viewport = page.getViewport({scale: 1.5});
                        var scale = containerWidth / viewport.width;
                        var scaledViewport = page.getViewport({scale: scale * 1.5});
-                       
+                                              
                        var canvas = document.createElement('canvas');
                        canvas.style.width = '100%';
                        canvas.style.display = 'block';
                        pageContainer.appendChild(canvas);
+                        
+                       // Extract text for TTS & Search
+                       var textContainer = document.createElement('div');
+                       textContainer.className = 'pdf-text';
+                       textContainer.style.position = 'absolute';
+                       textContainer.style.left = '-9999px';
+                       textContainer.style.width = '1px';
+                       textContainer.style.height = '1px';
+                       textContainer.style.overflow = 'hidden';
+                       pageContainer.appendChild(textContainer);
+                        
+                       page.getTextContent().then(function(textContent) {
+                          if (textContent && textContent.items) {
+                             var pageText = textContent.items.map(function(item) {
+                                return item.str;
+                             }).join(' ');
+                             textContainer.textContent = pageText;
+                          }
+                       }).catch(function(e) {
+                          console.log('PDF text extract error:', e);
+                       });
                        
                        var context = canvas.getContext('2d');
                        canvas.height = scaledViewport.height;
@@ -635,22 +656,55 @@ const HTML_CONTENT = `
               }
               window.autoScrollFrame = requestAnimationFrame(step);
            }
-        } else if (data.type === 'tts_extract') {
-            if (rendition) {
-                var contents = rendition.getContents();
-                if (contents.length > 0) {
-                    var text = contents[0].document.body.innerText || contents[0].document.body.textContent;
-                    var sentences = text.match(/[^\.!\?]+[\.!\?]+/g) || [text];
-                    sendToReact({ type: 'tts_data', paragraphs: sentences.map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; }) });
-                }
-            } else {
-                var viewer = document.getElementById('viewer');
-                if (viewer) {
-                    var text = viewer.innerText || viewer.textContent;
-                    var sentences = text.match(/[^\.!\?]+[\.!\?]+/g) || [text];
-                    sendToReact({ type: 'tts_data', paragraphs: sentences.map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; }) });
-                }
-            }
+         } else if (data.type === 'tts_extract') {
+             var text = "";
+             if (rendition) {
+                 var contents = rendition.getContents();
+                 if (contents.length > 0 && contents[0].document && contents[0].document.body) {
+                     text = contents[0].document.body.innerText || contents[0].document.body.textContent;
+                 }
+             }
+             
+             // Fallback: check all iframes inside viewer
+             if (!text || !text.trim()) {
+                 var viewer = document.getElementById('viewer');
+                 if (viewer) {
+                     var iframes = viewer.querySelectorAll('iframe');
+                     if (iframes.length > 0) {
+                         for (var i = 0; i < iframes.length; i++) {
+                             try {
+                                 var doc = iframes[i].contentDocument || iframes[i].contentWindow.document;
+                                 if (doc && doc.body) {
+                                     var iframeText = doc.body.innerText || doc.body.textContent;
+                                     if (iframeText) {
+                                         text += " " + iframeText;
+                                     }
+                                 }
+                             } catch (e) {
+                                 console.log("Iframe text extract error:", e);
+                             }
+                         }
+                     }
+                 }
+             }
+
+             // Final fallback: check viewer text (PDF, DOCX, PPTX, etc.)
+             if (!text || !text.trim()) {
+                 var viewer = document.getElementById('viewer');
+                 if (viewer) {
+                     text = viewer.innerText || viewer.textContent;
+                 }
+             }
+
+             var sentences = [];
+             if (text && text.trim()) {
+                 sentences = text.match(/[^\.!\?]+[\.!\?]+/g) || [text];
+             }
+             
+             sendToReact({ 
+                 type: 'tts_data', 
+                 paragraphs: sentences.map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; }) 
+             });
          } else if (data.type === 'search') {
             var query = data.query.toLowerCase();
             var results = [];
@@ -805,6 +859,12 @@ export default function ReaderScreen({ route, navigation }) {
   };
 
   useEffect(() => {
+    return () => {
+      Speech.stop();
+    };
+  }, []);
+
+  useEffect(() => {
     const initReader = async () => {
       const settings = await getSettings();
       if (settings) {
@@ -885,19 +945,33 @@ export default function ReaderScreen({ route, navigation }) {
   };
 
   const playTts = (paragraphs, index, rateOverride = ttsSpeed, pitchOverride = ttsPitch) => {
+    if (!paragraphs || paragraphs.length === 0) {
+      Alert.alert('Text-to-Speech', 'No readable text could be extracted from this page.');
+      setTtsPlaying(false);
+      return;
+    }
     if (index >= paragraphs.length) {
       setTtsPlaying(false);
       return;
     }
-    Speech.speak(paragraphs[index], {
-      rate: rateOverride,
-      pitch: pitchOverride,
-      onDone: () => {
-        setCurrentTtsIndex(index + 1);
-        playTts(paragraphs, index + 1, rateOverride, pitchOverride);
-      },
-      onError: () => setTtsPlaying(false)
-    });
+    try {
+      Speech.speak(paragraphs[index], {
+        rate: rateOverride,
+        pitch: pitchOverride,
+        onDone: () => {
+          setCurrentTtsIndex(index + 1);
+          playTts(paragraphs, index + 1, rateOverride, pitchOverride);
+        },
+        onError: (err) => {
+          console.log('TTS playback callback error:', err);
+          setTtsPlaying(false);
+        }
+      });
+    } catch (e) {
+      console.log('TTS speak synchronous error:', e);
+      Alert.alert('TTS Error', 'Failed to start text-to-speech engine: ' + e.message);
+      setTtsPlaying(false);
+    }
   };
 
   const stopTts = () => {
